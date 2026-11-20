@@ -811,6 +811,14 @@ def write_addr_unit(addr_unit_file, addr_unit_val):
         return None
     return _damo_fs.write_file(addr_unit_file, '%d' % addr_unit_val)
 
+def write_telescope(telescope_file):
+    # Present only on kernels that implement Telescope. Absent file means
+    # the running kernel has no switch, so leave the configuration alone.
+    if not os.path.isfile(telescope_file):
+        return None
+    return _damo_fs.write_file(
+            telescope_file, os.environ.get('DAMON_TELESCOPE', '0'))
+
 def write_context_dir(dir_path, context):
     err = _damo_fs.write_file(os.path.join(dir_path, 'operations'),
                               context.ops)
@@ -833,6 +841,10 @@ def write_context_dir(dir_path, context):
 
     err = write_addr_unit(os.path.join(dir_path, 'addr_unit'),
                           context.addr_unit)
+    if err is not None:
+        return err
+
+    err = write_telescope(os.path.join(dir_path, 'telescope'))
     if err is not None:
         return err
 
