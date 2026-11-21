@@ -392,6 +392,10 @@ def aggregate_snapshots(snapshots):
             region.nr_accesses.samples += nr_acc_to_add[region]
             region.nr_accesses.val = region.nr_accesses.samples
             region.nr_accesses.unit = _damon.unit_samples
+            # ratio and sampled PTE counts no longer describe the sum
+            region.nr_accesses.percent = None
+            region.nr_accesses.raw_accesses = None
+            region.nr_accesses.nr_samples = None
 
     new_snapshot = DamonSnapshot(snapshots[0].start_time,
             snapshots[-1].end_time, new_regions, None)
@@ -449,7 +453,7 @@ def record_of(target_id, records, intervals):
     records.append(record)
     return record
 
-def parse_damon_trace_aggregated(fields):
+def parse_damon_trace_aggregated(fields, intervals=None):
     '''
     The fields is like below:
 
@@ -459,10 +463,21 @@ def parse_damon_trace_aggregated(fields):
 
     Note that the last field is not in the early version[1].
 
+    Kernels that sample multiple PTEs per sampling interval have the number of
+    the sampled PTEs (nr_samples) between nr_accesses and age:
+
+    82877.315633: damon:damon_aggregated: \
+            target_id=18446623435582458880 nr_regions=17 \
+            140731667070976-140731668037632: 0 20 3
+
+    The access frequency is nr_accesses / nr_samples in the case.  If the
+    monitoring intervals are given, it is also converted to the number of
+    sampling intervals of an aggregation interval ('samples').
+
     [1] https://lore.kernel.org/linux-mm/df8d52f1fb2f353a62ff34dc09fe99e32ca1f63f.1636610337.git.xhao@linux.alibaba.com/
     '''
 
-    if not len(fields) in [6, 7]:
+    if not len(fields) in [6, 7, 8]:
         return None, None, None, None
 
     end_time = int(float(fields[0][:-1]) * 1000000000)
@@ -471,12 +486,19 @@ def parse_damon_trace_aggregated(fields):
 
     start_addr, end_addr = [int(x) for x in fields[4][:-1].split('-')]
     nr_accesses = int(fields[5])
-    if len(fields) == 7:
+    nr_samples = None
+    if len(fields) == 8:
+        nr_samples = int(fields[6])
+        age = int(fields[7])
+    elif len(fields) == 7:
         age = int(fields[6])
     else:
         age = None
     region = _damon.DamonRegion(start_addr, end_addr, nr_accesses,
             _damon.unit_samples, age, _damon.unit_aggr_intervals)
+    if nr_samples is not None:
+        region.nr_accesses = _damon.DamonNrAccesses.from_sampled_ptes(
+                nr_accesses, nr_samples, intervals)
 
     return region, end_time, target_id, nr_regions
 
@@ -504,7 +526,7 @@ def parse_damos_trace_before_apply(fields):
 
     return region, end_time, target_id, nr_regions
 
-def parse_damon_trace_region(fields):
+def parse_damon_trace_region(fields, intervals=None):
     '''
     fields could be that for damon_aggregated or damos_before_apply events
 
@@ -517,7 +539,7 @@ def parse_damon_trace_region(fields):
     traceevent = fields[1][:-1]
     if traceevent in [traceevent_damon_aggregated,
                       perf_event_damon_aggregated]:
-        return parse_damon_trace_aggregated(fields)
+        return parse_damon_trace_aggregated(fields, intervals)
     elif traceevent in [traceevent_damos_before_apply,
                         perf_event_damos_before_apply]:
         return parse_damos_trace_before_apply(fields)
@@ -567,7 +589,7 @@ def parse_damon_trace(trace_text, trace_cmd, monitoring_intervals):
         if parsed is True:
             continue
         region, end_time, target_id, nr_regions = parse_damon_trace_region(
-                fields)
+                fields, monitoring_intervals)
         if region is None:
             continue
 
@@ -705,6 +727,9 @@ def write_perf_script(records, file_path):
     kdamond.0  4452 [000] 82877.315633: damon:damon_aggregated: \
             target_id=18446623435582458880 nr_regions=17 \
             140731667070976-140731668037632: 0 3
+
+    Regions that have the sampled PTE counts get the nr_samples field after
+    nr_accesses, like the kernel's tracepoint has.
     '''
 
     add_fake_snapshot_if_needed(records)
@@ -713,14 +738,19 @@ def write_perf_script(records, file_path):
             snapshots = record.snapshots
             for snapshot in snapshots:
                 for region in snapshot.regions:
+                    nr_acc = region.nr_accesses
+                    if nr_acc.nr_samples is not None:
+                        counts = '%d %d' % (nr_acc.raw_accesses,
+                                nr_acc.nr_samples)
+                    else:
+                        counts = '%d' % nr_acc.samples
                     f.write(' '.join(['kdamond.x', 'xxxx', 'xxxx',
                         '%f:' % (snapshot.end_time / 1000000000.0),
                         'damon:damon_aggregated:',
                         'target_id=%s' % record.target_id,
                         'nr_regions=%d' % len(snapshot.regions),
-                        '%d-%d: %d %s' % (region.start, region.end,
-                            region.nr_accesses.samples,
-                            region.age.aggr_intervals)]) + '\n')
+                        '%d-%d: %s %s' % (region.start, region.end,
+                            counts, region.age.aggr_intervals)]) + '\n')
 
 def parse_file_permission_str(file_permission_str):
     try:
@@ -1996,6 +2026,28 @@ def get_records(tried_regions_of=None, record_file=None,
     filter_copy.filter_records(records)
     return records, None
 
+def fill_unset_nr_accesses(damon_records_list, kdamonds):
+    '''
+    Regions of traces of kernels that sample multiple PTEs per sampling
+    interval know only their access ratio, unless the monitoring intervals
+    were given while parsing.  Fill the number of samples using the intervals
+    of the context that generated the records.
+    '''
+    for record in damon_records_list:
+        intervals = record.intervals
+        if intervals is None:
+            try:
+                intervals = kdamonds[
+                        record.kdamond_idx].contexts[record.context_idx
+                                ].intervals
+            except (IndexError, TypeError, AttributeError):
+                continue
+        for snapshot in record.snapshots:
+            for region in snapshot.regions:
+                nr_acc = region.nr_accesses
+                if nr_acc is not None and nr_acc.samples is None:
+                    nr_acc.add_unset_unit(intervals)
+
 def get_damo_records(
         tried_regions_of=None, record_files=None, snapshot_damos_filters=None,
         record_filter=None, total_sz_only=False, dont_merge_regions=True):
@@ -2032,6 +2084,7 @@ def get_damo_records(
                 record_filter, total_sz_only, dont_merge_regions)
         if err is not None:
             return None, err
+        fill_unset_nr_accesses(damon_records_list, kdamonds)
         damon_records = DamonRecords(
                 kdamonds=kdamonds, record_list=damon_records_list)
         damo_records.append(DamoRecord(damon_records=damon_records))

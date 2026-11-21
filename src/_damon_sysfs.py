@@ -819,6 +819,14 @@ def write_telescope(telescope_file):
     return _damo_fs.write_file(
             telescope_file, os.environ.get('DAMON_TELESCOPE', '0'))
 
+def write_max_ptes_per_sampling(max_ptes_file):
+    # Present only on kernels that scan multiple PTEs per sampling interval.
+    # Absent file means the kernel samples one PTE, so leave it alone.
+    if not os.path.isfile(max_ptes_file):
+        return None
+    return _damo_fs.write_file(
+            max_ptes_file, os.environ.get('DAMON_MAX_PTES_PER_SAMPLING', '1'))
+
 def write_context_dir(dir_path, context):
     err = _damo_fs.write_file(os.path.join(dir_path, 'operations'),
                               context.ops)
@@ -845,6 +853,11 @@ def write_context_dir(dir_path, context):
         return err
 
     err = write_telescope(os.path.join(dir_path, 'telescope'))
+    if err is not None:
+        return err
+
+    err = write_max_ptes_per_sampling(
+            os.path.join(dir_path, 'max_ptes_per_sampling'))
     if err is not None:
         return err
 

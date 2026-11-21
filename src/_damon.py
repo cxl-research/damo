@@ -532,6 +532,12 @@ class DamonNrAccesses:
     samples = None
     percent = None
     hz = None
+    # Set only for results of kernels that sample multiple PTEs per sampling
+    # interval (the nr_samples field of the damon_aggregated tracepoint).
+    # raw_accesses is the number of accessed PTEs, nr_samples is the number of
+    # sampled PTEs, both over an aggregation interval.
+    raw_accesses = None
+    nr_samples = None
 
     def __init__(self, val, unit):
         if val == None or unit == None:
@@ -542,6 +548,26 @@ class DamonNrAccesses:
             self.percent = _damo_fmt_str.text_to_percent(val)
         else:
             raise Exception('invalid DamonNrAccesses unit \'%s\'' % unit)
+
+    @classmethod
+    def from_sampled_ptes(cls, raw_accesses, nr_samples, intervals=None):
+        '''
+        Make a DamonNrAccesses from the counts of accessed and sampled PTEs.
+        The access ratio is the percent.  If the monitoring intervals are
+        given, samples is the ratio in the unit of one sample per sampling
+        interval, that is, the number of the sampling intervals of an
+        aggregation interval.
+        '''
+        ret = DamonNrAccesses(None, None)
+        ret.raw_accesses = raw_accesses
+        ret.nr_samples = nr_samples
+        ret.percent = (raw_accesses * 100.0 / nr_samples
+                if nr_samples else 0.0)
+        if intervals is not None:
+            max_samples = intervals.aggr / intervals.sample
+            ret.samples = (int(raw_accesses * max_samples / nr_samples)
+                    if nr_samples else 0)
+        return ret
 
     def __eq__(self, other):
         return (type(self) == type(other) and
@@ -580,12 +606,19 @@ class DamonNrAccesses:
             ret.samples = _damo_fmt_str.text_to_nr(kv['samples'])
         if 'percent' in kv and kv['percent'] != None:
             ret.percent = _damo_fmt_str.text_to_percent(kv['percent'])
+        if kv.get('nr_samples') is not None:
+            ret.raw_accesses = kv['raw_accesses']
+            ret.nr_samples = kv['nr_samples']
         return ret
 
     def to_kvpairs(self, raw=False):
-        return collections.OrderedDict(
+        kvpairs = collections.OrderedDict(
                 [('samples', self.samples), ('percent', self.percent),
                  ])
+        if self.nr_samples is not None:
+            kvpairs['raw_accesses'] = self.raw_accesses
+            kvpairs['nr_samples'] = self.nr_samples
+        return kvpairs
 
 class DamonAge:
     usec = None
