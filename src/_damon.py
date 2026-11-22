@@ -538,6 +538,11 @@ class DamonNrAccesses:
     # sampled PTEs, both over an aggregation interval.
     raw_accesses = None
     nr_samples = None
+    # Number of samplings per aggregation interval that the region was sampled
+    # with (the aggr_samplings field of the damon_aggregated tracepoint of
+    # kernels with per-region sampling frequency).  nr_accesses / nr_samples
+    # times this is the estimate of the accesses of an aggregation interval.
+    aggr_samplings = None
 
     def __init__(self, val, unit):
         if val == None or unit == None:
@@ -550,7 +555,8 @@ class DamonNrAccesses:
             raise Exception('invalid DamonNrAccesses unit \'%s\'' % unit)
 
     @classmethod
-    def from_sampled_ptes(cls, raw_accesses, nr_samples, intervals=None):
+    def from_sampled_ptes(cls, raw_accesses, nr_samples, intervals=None,
+                          aggr_samplings=None):
         '''
         Make a DamonNrAccesses from the counts of accessed and sampled PTEs.
         The access ratio is the percent.  If the monitoring intervals are
@@ -561,6 +567,7 @@ class DamonNrAccesses:
         ret = DamonNrAccesses(None, None)
         ret.raw_accesses = raw_accesses
         ret.nr_samples = nr_samples
+        ret.aggr_samplings = aggr_samplings
         ret.percent = (raw_accesses * 100.0 / nr_samples
                 if nr_samples else 0.0)
         if intervals is not None:
@@ -609,6 +616,7 @@ class DamonNrAccesses:
         if kv.get('nr_samples') is not None:
             ret.raw_accesses = kv['raw_accesses']
             ret.nr_samples = kv['nr_samples']
+            ret.aggr_samplings = kv.get('aggr_samplings')
         return ret
 
     def to_kvpairs(self, raw=False):
@@ -618,6 +626,8 @@ class DamonNrAccesses:
         if self.nr_samples is not None:
             kvpairs['raw_accesses'] = self.raw_accesses
             kvpairs['nr_samples'] = self.nr_samples
+            if self.aggr_samplings is not None:
+                kvpairs['aggr_samplings'] = self.aggr_samplings
         return kvpairs
 
 class DamonAge:

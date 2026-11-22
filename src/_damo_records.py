@@ -396,6 +396,7 @@ def aggregate_snapshots(snapshots):
             region.nr_accesses.percent = None
             region.nr_accesses.raw_accesses = None
             region.nr_accesses.nr_samples = None
+            region.nr_accesses.aggr_samplings = None
 
     new_snapshot = DamonSnapshot(snapshots[0].start_time,
             snapshots[-1].end_time, new_regions, None)
@@ -474,10 +475,18 @@ def parse_damon_trace_aggregated(fields, intervals=None):
     monitoring intervals are given, it is also converted to the number of
     sampling intervals of an aggregation interval ('samples').
 
+    Kernels that sample every region with its own frequency have the number
+    of samplings per aggregation interval that the region was sampled with
+    (aggr_samplings) between nr_samples and age:
+
+    82877.315633: damon:damon_aggregated: \
+            target_id=18446623435582458880 nr_regions=17 \
+            140731667070976-140731668037632: 0 20 16 3
+
     [1] https://lore.kernel.org/linux-mm/df8d52f1fb2f353a62ff34dc09fe99e32ca1f63f.1636610337.git.xhao@linux.alibaba.com/
     '''
 
-    if not len(fields) in [6, 7, 8]:
+    if not len(fields) in [6, 7, 8, 9]:
         return None, None, None, None
 
     end_time = int(float(fields[0][:-1]) * 1000000000)
@@ -487,7 +496,12 @@ def parse_damon_trace_aggregated(fields, intervals=None):
     start_addr, end_addr = [int(x) for x in fields[4][:-1].split('-')]
     nr_accesses = int(fields[5])
     nr_samples = None
-    if len(fields) == 8:
+    aggr_samplings = None
+    if len(fields) == 9:
+        nr_samples = int(fields[6])
+        aggr_samplings = int(fields[7])
+        age = int(fields[8])
+    elif len(fields) == 8:
         nr_samples = int(fields[6])
         age = int(fields[7])
     elif len(fields) == 7:
@@ -498,7 +512,7 @@ def parse_damon_trace_aggregated(fields, intervals=None):
             _damon.unit_samples, age, _damon.unit_aggr_intervals)
     if nr_samples is not None:
         region.nr_accesses = _damon.DamonNrAccesses.from_sampled_ptes(
-                nr_accesses, nr_samples, intervals)
+                nr_accesses, nr_samples, intervals, aggr_samplings)
 
     return region, end_time, target_id, nr_regions
 
@@ -729,7 +743,8 @@ def write_perf_script(records, file_path):
             140731667070976-140731668037632: 0 3
 
     Regions that have the sampled PTE counts get the nr_samples field after
-    nr_accesses, like the kernel's tracepoint has.
+    nr_accesses, and the aggr_samplings field after it if they have it, like
+    the kernel's tracepoint has.
     '''
 
     add_fake_snapshot_if_needed(records)
@@ -742,6 +757,8 @@ def write_perf_script(records, file_path):
                     if nr_acc.nr_samples is not None:
                         counts = '%d %d' % (nr_acc.raw_accesses,
                                 nr_acc.nr_samples)
+                        if nr_acc.aggr_samplings is not None:
+                            counts += ' %d' % nr_acc.aggr_samplings
                     else:
                         counts = '%d' % nr_acc.samples
                     f.write(' '.join(['kdamond.x', 'xxxx', 'xxxx',

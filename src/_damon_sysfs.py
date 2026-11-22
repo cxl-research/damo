@@ -827,6 +827,25 @@ def write_max_ptes_per_sampling(max_ptes_file):
     return _damo_fs.write_file(
             max_ptes_file, os.environ.get('DAMON_MAX_PTES_PER_SAMPLING', '1'))
 
+def write_afs_params(dir_path):
+    '''
+    Set the adaptive frequency sampling parameters of the context, from
+    environment variables.  The files exist only on kernels with per-region
+    sampling frequency.  Absent files, and variables that are not set, leave
+    the kernel's defaults alone.
+    '''
+    for filename, env in [('samplings_per_aggr', 'DAMON_SAMPLINGS_PER_AGGR'),
+                          ('max_aggr_samplings', 'DAMON_MAX_AGGR_SAMPLINGS'),
+                          ('afs_lo_pct', 'DAMON_AFS_LO_PCT'),
+                          ('afs_hi_pct', 'DAMON_AFS_HI_PCT')]:
+        file_path = os.path.join(dir_path, filename)
+        if not os.path.isfile(file_path) or not env in os.environ:
+            continue
+        err = _damo_fs.write_file(file_path, os.environ[env])
+        if err is not None:
+            return err
+    return None
+
 def write_context_dir(dir_path, context):
     err = _damo_fs.write_file(os.path.join(dir_path, 'operations'),
                               context.ops)
@@ -858,6 +877,10 @@ def write_context_dir(dir_path, context):
 
     err = write_max_ptes_per_sampling(
             os.path.join(dir_path, 'max_ptes_per_sampling'))
+    if err is not None:
+        return err
+
+    err = write_afs_params(dir_path)
     if err is not None:
         return err
 
