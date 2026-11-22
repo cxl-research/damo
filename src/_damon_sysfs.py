@@ -827,6 +827,15 @@ def write_max_ptes_per_sampling(max_ptes_file):
     return _damo_fs.write_file(
             max_ptes_file, os.environ.get('DAMON_MAX_PTES_PER_SAMPLING', '1'))
 
+def write_min_region_size(min_region_file):
+    # Present only on kernels with a configurable minimum region size.
+    # The variable is unset for the kernel default (the base page size).
+    if not os.path.isfile(min_region_file) or \
+            not 'DAMON_MIN_REGION_SIZE' in os.environ:
+        return None
+    return _damo_fs.write_file(
+            min_region_file, os.environ['DAMON_MIN_REGION_SIZE'])
+
 def write_afs_params(dir_path):
     '''
     Set the adaptive frequency sampling parameters of the context, from
@@ -877,6 +886,10 @@ def write_context_dir(dir_path, context):
 
     err = write_max_ptes_per_sampling(
             os.path.join(dir_path, 'max_ptes_per_sampling'))
+    if err is not None:
+        return err
+
+    err = write_min_region_size(os.path.join(dir_path, 'min_region_size'))
     if err is not None:
         return err
 
